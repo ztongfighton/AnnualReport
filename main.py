@@ -5,7 +5,7 @@ import strategy
 import strategy_lib
 
 w.start()
-#strategy_lib.plotComparison(w, "20170103", "20170331")
+strategy_lib.plotComparison(w, "20120104", "20120405")
 
 
 s = strategy.Strategy()
@@ -28,7 +28,7 @@ for trade_day in s.trade_days:
     print("Finished process " + date)
 
 #二次清盘
-#s.clearInvestCombi()
+s.clearInvestCombi()
 
 #生成净值文件
 writer = pd.ExcelWriter("净值.xls")

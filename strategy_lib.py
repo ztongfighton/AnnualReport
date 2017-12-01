@@ -19,11 +19,10 @@ def isTrading(w, stock_code, date):
 def isMaxUpOrDown(w, stock_code, date):
     maxupordown = w.wss(stock_code, "maxupordown", "tradeDate=" + date).Data[0][0]
     open_price = w.wsd(stock_code, 'open', date, date, "Fill=Previous").Data[0][0]
-    close_price = w.wsd(stock_code, 'close', date, date, "Fill=Previous").Data[0][0]
     low_price = w.wsd(stock_code, 'low', date, date, "Fill=Previous").Data[0][0]
     high_price = w.wsd(stock_code, 'high', date, date, "Fill=Previous").Data[0][0]
 
-    if maxupordown == 0 or (maxupordown != 0 and (open_price != close_price or open_price != high_price or open_price != low_price)):
+    if maxupordown == 0 or (maxupordown != 0 and (open_price != high_price or open_price != low_price)):
         return False
     else:
         return True
@@ -79,7 +78,6 @@ def compareStockWithHS300(w, stock_code, start_date, end_date):
     plt.legend(loc='upper left')
     fig.autofmt_xdate()
     plt.show()
-    #plt.savefig(stock_code + ".png")
 
 
 

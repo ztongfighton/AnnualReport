@@ -3,14 +3,14 @@ import numpy as np
 import pandas as pd
 import datetime
 import math
-import re
+import strategy_lib as sl
 
 class Strategy:
     global w
     # 设置回测开始时间
-    start_date = '20100101'
+    start_date = '20120101'
     # 设置回测结束时间
-    end_date = '20100331'
+    end_date = '20120331'
     #每日日终生成的交易买信号,包含stock_code, stock_name, amount和type等信息
     buy_signal = {}
     sell_signal = {}
@@ -46,7 +46,7 @@ class Strategy:
         self.last_exist_date = datetime.datetime.strftime(self.trade_days[-1], '%Y%m%d')
         #沪深300在1月第一个交易日的开盘点位
         initial_day = datetime.datetime.strftime(self.trade_days[0], '%Y%m%d')
-        self.hs300_initial = w.wss("000300.SH", "open", "tradeDate=" + initial_day + ";priceAdj=U;cycle=D").Data[0][0]
+        self.wind_A_initial = w.wss("881001.WI", "open", "tradeDate=" + initial_day + ";priceAdj=U;cycle=D").Data[0][0]
         #初始化资产净值
         self.initial_asset_value = self.cash
 
@@ -169,25 +169,20 @@ class Strategy:
                                  data.at[stock_codes[i], "stm_predict_issuingdate"]).days
         data["days_ahead"] = days_ahead
 
-        '''
-        #选出年报预披露时间在2月15日之前，较去年年报实际披露时间提前60日，三季报eps > 0, 归属母公司股东净利润同比增长率 > 10%，非次新股，非退市股
-        selected_stocks = data[(data.stm_predict_issuingdate < datetime.datetime(self.year + 1, 2, 15)) & (data.ipo_date < \
-                               datetime.datetime(self.year, 1, 1)) & (data.eps_basic > 0) & (data.yoyprofit > 10) & (data.days_ahead >= 60) \
-                               & (data.days_ahead < 365)]
-        '''
-
-        #选出年报预披露时间在2月15日之前,较去年年报实际披露时间提前60日,非次新的股票
-        candidates = data[(data.stm_predict_issuingdate < datetime.datetime(self.year + 1, 2, 15)) & (data.ipo_date < \
+        #选出年报预披露时间在2月15日之前(含2月15日）,较去年年报实际披露时间提前60日,非次新的股票
+        candidates = data[(data.stm_predict_issuingdate <= datetime.datetime(self.year + 1, 2, 15)) & (data.ipo_date < \
                                datetime.datetime(self.year, 1, 1)) & (data.days_ahead >= 60) & (data.days_ahead < 365)]
+
+        #计算筛选出的股票池一季度持有到期的收益率
+        candidates = self.candidateProfitAnalysis(candidates)
+
+        candidates = candidates.ix[:,["stock_name", "stm_predict_issuingdate", "stm_issuingdate", "days_ahead", "eps_basic","yoynetprofit", "buy_price", "sell_price", "profit"]]
 
         #筛选出可能高送转的股票
         high_tran_candidates = self.getHighTranCandidate(candidates)
 
         #筛选出有ST摘帽预期的股票
         st_stocks = self.getSTStock(candidates)
-
-        #筛选出限售股解禁的股票
-        #share_unlock_stocks = self.getShareUnlockStock(selected_stocks)
 
         #生成买信号
         stock_codes = list(candidates.index)
@@ -206,55 +201,35 @@ class Strategy:
             amount = math.floor(stock_asset / close_prices[stock_code] / 100) * 100
             self.buy_signal[stock_code] = [stock_name, amount, "Buy", buy_type]
 
+        avg_profit = candidates["profit"].mean()
+        print("股票池1有" + str(candidates.shape[0]) + "只股票，平均收益率：" + str(avg_profit) + "%")
+
+        #选出年报预披露时间在2月15日之后（不包含2月15日）,较去年年报实际披露时间提前60日,非次新的股票
+        candidates2 = data[(data.stm_predict_issuingdate > datetime.datetime(self.year + 1, 2, 15)) & (data.ipo_date < \
+                        datetime.datetime(self.year, 1, 1)) & (data.days_ahead >= 60) & (data.days_ahead < 365)]
+        candidates2 = self.candidateProfitAnalysis(candidates2)
+        candidates2 = candidates2.ix[:,["stock_name", "stm_predict_issuingdate", "stm_issuingdate", "days_ahead", "eps_basic","yoynetprofit", "buy_price", "sell_price", "profit"]]
+        avg_profit = candidates2["profit"].mean()
+        print("股票池2有" + str(candidates2.shape[0]) + "只股票，平均收益率：" + str(avg_profit) + "%")
+        high_tran_candidates2 = self.getHighTranCandidate(candidates2)
+        st_stocks2 = self.getSTStock(candidates2)
+
+        #选出年报预披露时间在2月15日之前（含2月15日）的股票
+        candidates3 = data[data.stm_predict_issuingdate <= datetime.datetime(self.year + 1, 2, 15)]
+        candidates3 = self.candidateProfitAnalysis(candidates3)
+        candidates3 = candidates3.ix[:,["stock_name", "stm_predict_issuingdate", "stm_issuingdate", "days_ahead", "eps_basic","yoynetprofit", "buy_price", "sell_price", "profit"]]
+        avg_profit = candidates3["profit"].mean()
+        print("股票池3有" + str(candidates3.shape[0]) + "只股票，平均收益率：" + str(avg_profit) + "%")
+
         writer = pd.ExcelWriter("股票池.xls")
-        candidates = candidates.ix[:, ["stock_name", "stm_predict_issuingdate", "stm_issuingdate", "days_ahead", "eps_basic", "yoynetprofit"]]
         candidates.to_excel(writer, "股票池")
         high_tran_candidates.to_excel(writer, "高送转预期股")
         st_stocks.to_excel(writer, "ST摘帽预期股")
+        candidates2.to_excel(writer, "股票池2")
+        high_tran_candidates2.to_excel(writer, "高送转预期股2")
+        st_stocks2.to_excel(writer, "ST摘帽预期股2")
+        candidates3.to_excel(writer, "股票池3")
         writer.save()
-
-        '''
-        selected_stocks["buy_price"] = 0.0
-        selected_stocks["sell_price"] = 0.0
-        selected_stocks["profit"] = 0.0
-        stock_codes = list(selected_stocks.index)
-        buy_prices = w.wss(stock_codes, "open", "tradeDate=" + datetime.datetime.strftime(self.trade_days[0],'%Y%m%d') + ";priceAdj=F;cycle=D").Data[0]
-        sell_prices = w.wss(stock_codes, "open", "tradeDate=" + datetime.datetime.strftime(self.trade_days[-1],'%Y%m%d') + ";priceAdj=F;cycle=D").Data[0]
-        buy_prices = dict(zip(stock_codes, buy_prices))
-        sell_prices = dict(zip(stock_codes, sell_prices))
-
-        for stock_code in stock_codes:
-            buy_price = buy_prices[stock_code]
-            sell_price = sell_prices[stock_code]
-            try:
-                profit = float('%.2f' % (100 * (sell_price - buy_price) / buy_price))
-                selected_stocks.at[stock_code, "buy_price"] = buy_price
-                selected_stocks.at[stock_code, "sell_price"] = sell_price
-                selected_stocks.at[stock_code, "profit"] = profit
-            except:
-                continue
-        
-
-        columns = ["stock_name", "stm_predict_issuingdate", "stm_issuingdate", "days_ahead", "eps_basic", "yoyprofit", "profit"]
-        selected_stocks = selected_stocks.ix[:, columns]
-        '''
-        '''
-        #记录筛选出的股票
-        writer = pd.ExcelWriter("买入信号.xls")
-        selected_stocks.to_excel(writer, "买入信号生成信息")
-        writer.save()
-
-        #生成买入信号,等权构建组合
-        stock_codes = list(selected_stocks.index)
-        n = len(stock_codes)
-        close_prices = w.wss(stock_codes, "close", "tradeDate=" + self.signal_date + ";priceAdj=U;cycle=D").Data[0]
-        close_prices = dict(zip(stock_codes, close_prices))
-        stock_asset = 1.0 * self.initial_asset_value / n
-        for stock_code in stock_codes:
-            stock_name = selected_stocks.at[stock_code, "stock_name"]
-            amount = math.floor(stock_asset / close_prices[stock_code] / 100) * 100
-            self.signal[stock_code] = [stock_name, amount, "Buy"]
-        '''
 
     def generateSellSignal(self, date):
         #无持仓返回
@@ -401,24 +376,28 @@ class Strategy:
                             self.sell_info.append([stock_code, stock_name, amount, "Sell", sell_type, sell_info, date])
 
         '''
-        #计算当前基准距离初始的涨跌
-        hs300 = w.wss("000300.SH", "close", "tradeDate=" + date + ";priceAdj=U;cycle=D").Data[0][0]
-        hs300 = hs300 / self.hs300_initial
+        #计算当前基准(万德全A)距离初始的涨跌
+        wind_A = w.wss("881001.WI", "close", "tradeDate=" + date + ";priceAdj=U;cycle=D").Data[0][0]
+        wind_A = wind_A / self.wind_A_initial
 
         #如果个股的涨跌向下偏离基准达5%，则生成卖出信号
-        stocks_in_position = list(self.position.keys())
-        n = len(stocks_in_position)
-        close_price_f = w.wss(stocks_in_position, "close", "tradeDate=" + date + ";priceAdj=F;cycle=D").Data[0]
-        for i in range(n):
-            stock_code = stocks_in_position[i]
+        stock_codes = list(self.position.keys())
+        close_price_f = w.wss(stock_codes, "close", "tradeDate=" + date + ";priceAdj=F;cycle=D").Data[0]
+        close_price_f = dict(zip(stock_codes, close_price_f))
+        for stock_code in stock_codes:
             p = self.position[stock_code]
-            cost = p[2]
-            if close_price_f[i] / cost - hs300 < -0.05:
-                stock_name = p[0]
-                amount = p[1]
-                self.signal[stock_code] = [stock_name, amount, "Sell"]
+            buy_type = p[-2]
+            if buy_type == 0:
+                cost = p[2]
+                if close_price_f[stock_code] / cost - wind_A < -0.06:
+                    stock_name = p[0]
+                    amount = p[1]
+                    sell_type = 4
+                    sell_info = "向下偏离wind全A指数超5%，万德全A涨跌：" + str(float('%.2f' % (100 * (wind_A - 1)))) + \
+                                "%，该个股涨跌：" + str(float('%.2f' % (100 * (close_price_f[stock_code] / cost - 1)))) + "%"
+                    self.sell_signal[stock_code] = [stock_name, amount, "Sell", sell_type, sell_info]
+                    self.sell_info.append([stock_code, stock_name, amount, "Sell", sell_type, sell_info, date])
         '''
-
 
     def generateClearSignal(self, date):
         for stock_code, p in self.position.items():
@@ -551,6 +530,11 @@ class Strategy:
                     if yoynetprofit_3rd[stock_code] < 0:
                         candidate_list.remove(stock_code)
             high_tran_candidates = high_tran_candidates.loc[candidate_list, :]
+
+            high_tran_candidates.insert(high_tran_candidates.shape[1], "profit", 0.0)
+            for stock_code in list(high_tran_candidates.index):
+                high_tran_candidates.at[stock_code, "profit"] = candidates.at[stock_code, "profit"]
+
         return high_tran_candidates
 
     def getSTStock(self, candidates):
@@ -581,6 +565,30 @@ class Strategy:
             share_unlock_stocks.at[stock_code, "ratio"] = share_unlock_stocks.at[stock_code, "share_tradable_current"] / float_a_share[stock_code]
         share_unlock_stocks.sort_values(by = "ratio", ascending = False, inplace = True, axis = 0)
         return share_unlock_stocks
+
+    def candidateProfitAnalysis(self, candidates):
+        stock_codes = list(candidates.index)
+        first_date = datetime.datetime.strftime(self.trade_days[0],"%Y%m%d")
+        last_date = datetime.datetime.strftime(self.trade_days[-1],"%Y%m%d")
+        buy_prices = w.wss(stock_codes, "open", "tradeDate=" + first_date + ";priceAdj=F;cycle=D").Data[0]
+        buy_prices = dict(zip(stock_codes, buy_prices))
+        sell_prices = w.wss(stock_codes, "open", "tradeDate=" + last_date + ";priceAdj=F;cycle=D").Data[0]
+        sell_prices = dict(zip(stock_codes, sell_prices))
+        ncol = candidates.shape[1]
+        candidates.insert(ncol, "buy_price", 0.0)
+        candidates.insert(ncol + 1, "sell_price", 0.0)
+        candidates.insert(ncol + 2, "profit", 0.0)
+        tmp = list(candidates.index)
+        for stock_code in list(candidates.index):
+            candidates.at[stock_code, "buy_price"] = buy_prices[stock_code]
+            candidates.at[stock_code, "sell_price"] = sell_prices[stock_code]
+            profit = 100.0 * (sell_prices[stock_code] - buy_prices[stock_code]) / buy_prices[stock_code]
+            candidates.at[stock_code, "profit"] = profit
+            if sl.isTrading(w, stock_code, first_date) == False or sl.isMaxUpOrDown(w, stock_code, first_date) == True:
+                tmp.remove(stock_code)
+        candidates = candidates[candidates.index.isin(tmp)]
+        return candidates
+
 
 
 
